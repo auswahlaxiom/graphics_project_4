@@ -10,7 +10,8 @@
 /* be seen in both shaders.                       */
 /* ---------------------------------------------- */
 
-uniform float angle;
+uniform int show_sites;
+uniform int rand_colors;
 
 /* --------------- SAMPLER UNIFORMS ------------- */
 /* The binding layout parameter needs to be the   */
@@ -26,8 +27,8 @@ layout (binding=1) uniform sampler2D tex;
 /* and interpolated on the rasterization stage    */
 /* ---------------------------------------------- */
 
-noperspective in vec2 param;
-flat in vec2 wdir;
+noperspective in vec2 coord;
+flat in vec2 site;
 flat in vec3 col;
 flat in int instance;
 
@@ -46,23 +47,29 @@ out vec3 fragcolor;
 
 void main()
 {
-  vec2 dir = wdir;
+  
 
-  // rotate the direction vector only for instance #2
-
-  if (instance==2)
-  {
-    dir = vec2(cos(angle)*wdir.x - sin(angle)*wdir.y, cos(angle)*wdir.y + sin(angle)*wdir.x);
-  }
-
-  // alter depth depending on where you are (param) and 
-  // dir (which is an instanced attribute value passed here
-  // from the vertex shader)
-
-  gl_FragDepth = 0.5*(1+sin(10/(0.3+abs(dot(param,dir)))));
+  // alter depth depending on where you are (coord) and site location
+  float dist = distance(site, coord) / 3.0;
+  gl_FragDepth = dist;
 
   // col is also an instanced attribute - color each instance
   // using a constant color
+  // scale texture coordinates to [-1,1][-1,1]
+  vec2 tex_coord = 0.5 * (site + vec2(1.0,1.0));
+  tex_coord = vec2(tex_coord.x, 1-tex_coord.y);
 
-  fragcolor = col;
+  if ((dist < 0.002) && (show_sites == 1)) {
+    fragcolor = vec3(0.f,0.f,0.f);
+  } else {
+    if (rand_colors == 1) {
+      fragcolor = col;
+    } else {
+      vec3 texture_vals = texture(tex,tex_coord).rgb;
+      fragcolor = vec3(
+        texture_vals.x,
+        texture_vals.y, 
+        texture_vals.z);
+    }
+  }
 }

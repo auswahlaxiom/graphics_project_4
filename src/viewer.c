@@ -35,6 +35,13 @@ static GLint wid;               /* GLUT window id; value asigned in main() and s
 static GLint vpw = VPD_DEFAULT; /* viewport dimensions; changed when window is resized (resize callback) */
 static GLint vph = VPD_DEFAULT;
 
+static GLint number_of_sites = 32;
+static const GLint max_number_of_sites = 65536;
+
+static bool rand_colors = true;
+
+static bool show_sites = true;
+
 /* ----------------------------------------------------- */
 
 // vertics of the square extending from -1 to 1 in x and y
@@ -47,23 +54,6 @@ GLfloat square_vertices[] = {
    1,  1
 };
 
-// this is the buffer for an input attribute of type vec2 that will be constant for each
-// instance; we'll be drawing two instances, hence we need two vec2's or 4 floats
-// it will control the direction of a scaled dine wave-like depth perturbation in fragment shader
-
-GLfloat wave_direction[] = {
-  0,1,
-  1,0,
-  sqrt(2.0f)/2,sqrt(2.0f)/2
-};
-
-// and here is one for a vec3 attribute (color of fragment)
-
-GLfloat color[] = {
-  0,1,0,
-  1,0,0,
-  0,0,1
-};
 
 /* ----------------------------------------------------- */
 
@@ -71,8 +61,9 @@ GLfloat color[] = {
 
 VertexArray *va_square = NULL;
 Buffer *buf_square_vertices = NULL;
-Buffer *buf_wave_direction = NULL;
-Buffer *buf_color = NULL;
+Buffer *buf_rand_color = NULL;
+Buffer *buf_site_loc = NULL;
+Buffer *buf_angle_velocity = NULL;
 
 Program *square_program = NULL;
 
@@ -107,13 +98,31 @@ void setup_buffers()
   // The last argument is a pointer to the actual vertex data.
   buf_square_vertices = new Buffer(2,4,square_vertices);
 
-  // wave direction attribute - we want it to be vec2, so the first arg is 2
-  //  the buffer contains 2 vec2 values, so the second argument is also 2
-  buf_wave_direction = new Buffer(2,3,wave_direction);
+  // randomly generate maximum possible site locations
+  GLfloat *site_locs = new GLfloat[2*max_number_of_sites];
 
-  // similarly for color, except it has 3 components
-  buf_color = new Buffer(3,3,color);
+  // random multipliers for angle of rotation
+  GLfloat *rand_angle_velocities = new GLfloat[max_number_of_sites];
 
+  // random rgb colors per instance (cone)
+  GLfloat *rand_colors = new GLfloat[max_number_of_sites*3];
+
+  for (int i = 0; i < max_number_of_sites; i++) {
+    site_locs[2*i+0] = 1-2*drand48();
+    site_locs[2*i+1] = 1-2*drand48();
+
+    rand_colors[3*i+0] = drand48();
+    rand_colors[3*i+1] = drand48();
+    rand_colors[3*i+2] = drand48();
+
+    rand_angle_velocities[i] = drand48() + 0.1;
+  }
+
+  buf_site_loc = new Buffer(2, max_number_of_sites, site_locs);
+  buf_rand_color = new Buffer(3, max_number_of_sites, rand_colors);
+  buf_angle_velocity = new Buffer(1, max_number_of_sites, rand_angle_velocities);
+
+  
   // construct the square VA
   va_square = new VertexArray;
 
@@ -129,11 +138,13 @@ void setup_buffers()
   //  vertices in the ith instance would use index i/d 
   //  (integer division is used here)
   
-  va_square->attachAttribute(1,buf_wave_direction,1);
+  va_square->attachAttribute(1, buf_site_loc, 1);
 
   // color is similar
-  
-  va_square->attachAttribute(2,buf_color,1);
+  va_square->attachAttribute(2, buf_rand_color, 1);
+
+  // as is angle velocities
+  va_square->attachAttribute(3, buf_angle_velocity, 1);
 }
 
 /* ----------------------------------------------------- */
@@ -147,7 +158,7 @@ void setup_programs()
 /* ----------------------------------------------------- */
 
 bool animate = true;    // animate or not
-float multiplier = 0.005; // controls rotation speed
+float multiplier = 0.02; // controls rotation speed
 int dcounter = 1;       // used to increment the frame counter (set to zero to freeze)
 
 /* ----------------------------------------------------- */
@@ -176,14 +187,16 @@ void draw()
   glEnable(GL_DEPTH_TEST);
 
   square_program->setUniform("angle",angle);
+  square_program->setUniform("show_sites",show_sites);
+  square_program->setUniform("rand_colors",rand_colors);
 
   // turn on the square program...
   square_program->on();
 
   // Send vertices 0...3 to pipeline; this is an instanced variant
   // The first argument instructs the pipeline how to set up triangles
-  // last one is the number of instances (3)
-  va_square->sendToPipeline(GL_TRIANGLE_STRIP,0,4,3);
+  // last one is the number of instances (number of sites)
+  va_square->sendToPipeline(GL_TRIANGLE_STRIP,0,4,number_of_sites);
 
   // turn the program off
   square_program->off();
@@ -214,9 +227,11 @@ void draw()
 
 // you'll need to change this one as well...
 
-static const int MENU_SLOWER = 1;
-static const int MENU_FASTER = 2;
-static const int MENU_STOP_RUN = 3;
+static const int MENU_MORE_POINTS = 1;
+static const int MENU_TOGGLE_SITES = 2;
+static const int MENU_RESET = 3;
+static const int MENU_MOVE_POINTS = 4;
+static const int MENU_TOGGLE_COLORING= 5;
 
 void menu ( int value )
 {
@@ -225,20 +240,29 @@ void menu ( int value )
 
   switch(value)
     {
-    case MENU_SLOWER:
-      multiplier *= 0.6;
+    case MENU_MORE_POINTS:
+      number_of_sites = glm::min(number_of_sites * 2, max_number_of_sites);
       break;
-    case MENU_FASTER:
-      multiplier *= 1.4;
+    case MENU_TOGGLE_SITES:
+      show_sites = !show_sites;
       break;
-    case MENU_STOP_RUN:
+    case MENU_RESET:
+      number_of_sites = 32;
+      show_sites = true;
+      if(animate) {
+        menu(MENU_MOVE_POINTS);
+      }
+      rand_colors = true;
+      break;
+    case MENU_MOVE_POINTS:
       animate = !animate;
-      
       // this is to make sure that when animation is off, things don't move even if
       //  glutPostRedisplay comes up somewhere (e.g. in a mouse event)
       swap(dcounter,stored_dcounter);
       swap(multiplier,stored_multiplier);
-
+      break;
+    case MENU_TOGGLE_COLORING:
+      rand_colors = !rand_colors;
       break;
     }
 
@@ -261,8 +285,8 @@ void keyboard(GLubyte key, GLint x, GLint y)
     delete va_square;
     delete square_program;
     delete buf_square_vertices;
-    delete buf_wave_direction;
-    delete buf_color;
+    delete buf_site_loc;
+    delete buf_rand_color;
     delete t2D;
 
     exit(0);
@@ -309,7 +333,7 @@ GLint init_glut(GLint *argc, char **argv)
   glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
 
   /* create a GLUT window (not drawn until glutMainLoop() is entered) */
-  id = glutCreateWindow("MACS441 OpenGL Sample code");    
+  id = glutCreateWindow("Zach Fleischman Graphics Project 4");    
 
   /* register callbacks */
 
@@ -338,9 +362,11 @@ GLint init_glut(GLint *argc, char **argv)
   /* create menu */
   // you'll need to change this to build your menu
   GLint menuID = glutCreateMenu(menu);
-  glutAddMenuEntry("slower",MENU_SLOWER);
-  glutAddMenuEntry("faster",MENU_FASTER);
-  glutAddMenuEntry("stop/run",MENU_STOP_RUN);
+  glutAddMenuEntry("Spray more points",MENU_MORE_POINTS);
+  glutAddMenuEntry("Show/hide sites",MENU_TOGGLE_SITES);
+  glutAddMenuEntry("Reset",MENU_RESET);
+  glutAddMenuEntry("Toggle moving sites",MENU_MOVE_POINTS);
+  glutAddMenuEntry("Toggle coloring method",MENU_TOGGLE_COLORING);
   glutSetMenu(menuID);
   glutAttachMenu(GLUT_RIGHT_BUTTON);
 
@@ -372,6 +398,8 @@ GLint main(GLint argc, char **argv)
 
   // setup textures
   setup_textures();
+
+  menu(MENU_MOVE_POINTS);
 
   // Main loop: keep processing events.
   // This is actually an indefinite loop - you can only exit it using 
